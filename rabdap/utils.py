@@ -1,10 +1,10 @@
 import json
 import time
 import ldap3
+import threading
 
 class LdapClient:
-    def __init__(self, cfg):
-        self.throttle = cfg['LDAP_THROTTLE']
+    def __init__(self, cfg, throttle=1, timeout=10):
         self.ldap_attrs = [ 'brownBruID','brownShortID',
             'brownUUID','displayName','mail']
         self.server = ldap3.Server(cfg['LDAP_SERVER'])
@@ -13,18 +13,34 @@ class LdapClient:
             'cn={0},ou={1},dc=brown,dc=edu'.format(
                 cfg['LDAP_USER'], cfg['LDAP_USERGROUP']),
             cfg['LDAP_PASSWORD'])
+        self.throttle = throttle
+        self.timeout = timeout
         self.opened = False
         self.closed = True
+        self.shutdown = None
+
+    def set_throttle(self, throttle):
+        self.throttle = throttle
+
+    def set_timeout(self, timeout):
+        self.timeout = timeout
 
     def open(self):
-        self.conn.bind() 
+        self.conn.bind()
         self.opened = self.conn.bound
         self.closed = self.conn.closed
+        self.shutdown = threading.Timer(self.timeout, self.close)
+        self.shutdown.start()
 
     def close(self):
         self.conn.unbind()
         self.opened = self.conn.bound
         self.closed = self.conn.closed
+
+    def reset(self):
+        self.shutdown.cancel()
+        self.shutdown = threading.Timer(self.timeout, self.close)
+        self.shutdown.start()
 
     def search(self, searchTerms, field='bruid'):
         field_map = {

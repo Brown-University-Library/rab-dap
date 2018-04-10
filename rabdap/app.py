@@ -1,6 +1,7 @@
 import sys
 import csv
 import argparse
+import logging
 from datetime import datetime
 
 import pymongo
@@ -14,6 +15,13 @@ app = Flask(__name__)
 mongo_cli = pymongo.MongoClient(config['MONGO_ADDR'])
 ldap_cli = LdapClient(config)
 
+logging.basicConfig(
+    # filename=os.path.join(config['LOG_DIR'],'example.log'),
+    format='%(asctime)-15s %(message)s',
+    level=logging.DEBUG)
+
+# begin Data Transformations
+
 def unpack_ldap_data(ldapData):
     attrs = {
         'brownBruID' : 'bruid',
@@ -25,7 +33,7 @@ def unpack_ldap_data(ldapData):
     return { attrs[k]: v[0]
         for k,v in ldapData['attributes'].items() }
 
-def cast_entry(ldapData):
+def cast_entry_data(ldapData):
     entry_data = unpack_ldap_data(ldapData)
     entry_data['created'] = datetime.now()
     entry_data['updated'] = datetime.now()
@@ -46,11 +54,15 @@ def get_rabdap_entry(id_type, id_val):
         'rabid': True, 'shortid': True } )
     return resp
 
-def create_rabdap_entry(bruid):
-    ldap_cli.open()
-    resp = ldap_cli.search_bruids([bruid])
-    ldap_cli.close()
-    entry = cast_entry(resp[0])
+def create_rabdap_entry(id_type, id_val):
+    if ldap_cli.opened:
+        logging.debug("Open LDAP connection, resetting")
+        ldap_cli.reset()
+    else:
+        logging.debug("No LDAP connection, opening")        
+        ldap_cli.open()
+    resp = ldap_cli.search(id_val, id_type)
+    entry = cast_entry_data(resp[0])
     rab_iddb = mongo_cli.get_database(config['RABDAP'])
     inserted = rab_iddb['rabids'].insert_one(entry)
     return inserted.inserted_id
@@ -63,11 +75,13 @@ def get(id_type, id_val):
     entry = get_rabdap_entry(id_type, id_val)
     return jsonify(entry)
 
-@app.route('/getorcreate/bruid/<bruid>', methods=['GET'])
-def get_or_create(bruid):
-    entry = get_rabdap_entry('bruid', bruid)
+@app.route('/gorc/<id_type>/<id_val>', methods=['GET'])
+def get_or_create(id_type, id_val):
+    logging.debug("Getting ID data")
+    entry = get_rabdap_entry(id_type, id_val)
     if entry is None:
-        rabdap_id = create_rabdap_entry(bruid)
+        logging.debug("Local ID doesn't exist, creating")
+        rabdap_id = create_rabdap_entry(id_type, id_val)
         entry = get_rabdap_entry('_id', rabdap_id)
     return jsonify(entry)
 

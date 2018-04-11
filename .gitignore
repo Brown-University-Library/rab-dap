@@ -1,4 +1,6 @@
 settings.py
+ping_api.py
+*.log
 __pycache__/
 *.pyc
 */data/*

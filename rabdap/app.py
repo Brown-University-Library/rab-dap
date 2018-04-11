@@ -1,4 +1,5 @@
 import sys
+import os
 import csv
 import argparse
 import logging
@@ -16,7 +17,7 @@ mongo_cli = pymongo.MongoClient(config['MONGO_ADDR'])
 ldap_cli = LdapClient(config)
 
 logging.basicConfig(
-    # filename=os.path.join(config['LOG_DIR'],'example.log'),
+    filename=os.path.join(config['LOG_DIR'],'dev.log'),
     format='%(asctime)-15s %(message)s',
     level=logging.DEBUG)
 
@@ -56,10 +57,8 @@ def get_rabdap_entry(id_type, id_val):
 
 def create_rabdap_entry(id_type, id_val):
     if ldap_cli.opened:
-        logging.debug("Open LDAP connection, resetting")
         ldap_cli.reset()
     else:
-        logging.debug("No LDAP connection, opening")        
         ldap_cli.open()
     resp = ldap_cli.search(id_val, id_type)
     entry = cast_entry_data(resp[0])
@@ -77,10 +76,10 @@ def get(id_type, id_val):
 
 @app.route('/gorc/<id_type>/<id_val>', methods=['GET'])
 def get_or_create(id_type, id_val):
-    logging.debug("Getting ID data")
     entry = get_rabdap_entry(id_type, id_val)
     if entry is None:
-        logging.debug("Local ID doesn't exist, creating")
+        logging.debug("Creating ID data for {0}:{1}".format(
+            id_type, id_val) )
         rabdap_id = create_rabdap_entry(id_type, id_val)
         entry = get_rabdap_entry('_id', rabdap_id)
     return jsonify(entry)

@@ -13,8 +13,6 @@ from config.settings import config
 
 #Globals
 app = Flask(__name__)
-mongo_cli = pymongo.MongoClient(config['MONGO_ADDR'])
-
 logging.basicConfig(
     filename=os.path.join(config['LOG_DIR'],'dev.log'),
     format='%(asctime)-15s %(message)s',
@@ -55,12 +53,19 @@ def get_ldap_client():
         ldap_client.open()
     return ldap_client
 
+def get_mongo_client():
+    mongo_client = getattr(current_app, 'mongo_client', None)
+    if mongo_client is None:
+        mongo_client = pymongo.MongoClient(config['MONGO_ADDR'])
+        current_app.mongo_client = mongo_client
+    client_db = mongo_client.get_database(config['RABDAP'])
+    return client_db
 
 # begin Database Queries
 
 def get_rabdap_entry(id_type, id_val):
-    rab_iddb = mongo_cli.get_database(config['RABDAP'])
-    resp = rab_iddb['rabids'].find_one(
+    mongo_client = get_mongo_client()
+    resp = mongo_client['rabids'].find_one(
         { id_type : id_val },
         {'_id': False, 'bruid': True,
         'rabid': True, 'shortid': True } )
@@ -68,10 +73,10 @@ def get_rabdap_entry(id_type, id_val):
 
 def create_rabdap_entry(id_type, id_val):
     ldap_client = get_ldap_client()
+    mongo_client = get_mongo_client()
     resp = ldap_client.search(id_val, id_type)
     entry = cast_entry_data(resp[0])
-    rab_iddb = mongo_cli.get_database(config['RABDAP'])
-    inserted = rab_iddb['rabids'].insert_one(entry)
+    inserted = mongo_client['rabids'].insert_one(entry)
     return inserted.inserted_id
 
 # end Database Queries

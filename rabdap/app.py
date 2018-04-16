@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 
 import pymongo
-from flask import Flask, jsonify
+from flask import Flask, jsonify, current_app
 
 from utils import LdapClient
 from config.settings import config
@@ -14,7 +14,6 @@ from config.settings import config
 #Globals
 app = Flask(__name__)
 mongo_cli = pymongo.MongoClient(config['MONGO_ADDR'])
-ldap_cli = LdapClient(config)
 
 logging.basicConfig(
     filename=os.path.join(config['LOG_DIR'],'dev.log'),
@@ -45,6 +44,18 @@ def cast_entry_data(ldapData):
 
 # end Data Transformations
 
+def get_ldap_client():
+    ldap_client = getattr(current_app, 'ldap_client', None)
+    if ldap_client is None:
+        ldap_client = LdapClient(config)
+        current_app.ldap_client = ldap_client
+    if ldap_client.opened:
+        ldap_client.reset()
+    else:
+        ldap_client.open()
+    return ldap_client
+
+
 # begin Database Queries
 
 def get_rabdap_entry(id_type, id_val):
@@ -56,11 +67,8 @@ def get_rabdap_entry(id_type, id_val):
     return resp
 
 def create_rabdap_entry(id_type, id_val):
-    if ldap_cli.opened:
-        ldap_cli.reset()
-    else:
-        ldap_cli.open()
-    resp = ldap_cli.search(id_val, id_type)
+    ldap_client = get_ldap_client()
+    resp = ldap_client.search(id_val, id_type)
     entry = cast_entry_data(resp[0])
     rab_iddb = mongo_cli.get_database(config['RABDAP'])
     inserted = rab_iddb['rabids'].insert_one(entry)

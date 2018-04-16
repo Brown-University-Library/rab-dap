@@ -17,7 +17,7 @@ class LdapClient:
         self.timeout = timeout
         self.opened = False
         self.closed = True
-        self.shutdown = None
+        self.clock = None
 
     def set_throttle(self, throttle):
         self.throttle = throttle
@@ -29,8 +29,8 @@ class LdapClient:
         self.conn.bind()
         self.opened = self.conn.bound
         self.closed = self.conn.closed
-        self.shutdown = threading.Timer(self.timeout, self.close)
-        self.shutdown.start()
+        self.clock = threading.Timer(self.timeout, self.close)
+        self.clock.start()
 
     def close(self):
         self.conn.unbind()
@@ -38,9 +38,9 @@ class LdapClient:
         self.closed = self.conn.closed
 
     def reset(self):
-        self.shutdown.cancel()
-        self.shutdown = threading.Timer(self.timeout, self.close)
-        self.shutdown.start()
+        self.clock.cancel()
+        self.clock = threading.Timer(self.timeout, self.close)
+        self.clock.start()
 
     def search(self, searchTerms, field='bruid'):
         field_map = {

@@ -1,3 +1,5 @@
+apache/*
+venv/*
 settings.py
 ping_api.py
 *.log

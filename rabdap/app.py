@@ -3,12 +3,13 @@ import os
 import csv
 import argparse
 import logging
+import urllib
 from datetime import datetime
 
 import pymongo
 from flask import Flask, jsonify, current_app
 
-from utils import LdapClient
+from rabdap.utils import LdapClient
 from config.settings import config
 
 #Globals
@@ -56,9 +57,12 @@ def get_ldap_client():
 def get_mongo_client():
     mongo_client = getattr(current_app, 'mongo_client', None)
     if mongo_client is None:
-        mongo_client = pymongo.MongoClient(config['MONGO_ADDR'])
+        mongo_client = pymongo.MongoClient(
+            'mongodb://{0}:{1}@{2}/{3}'.format(config['MONGO_USER'],
+                 urllib.parse.quote_plus( config['MONGO_PASSW'] ),
+                 config['MONGO_ADDR'], config['MONGO_DB']) )
         current_app.mongo_client = mongo_client
-    client_db = mongo_client.get_database(config['RABDAP'])
+    client_db = mongo_client.get_database(config['MONGO_DB'])
     return client_db
 
 # begin Database Queries

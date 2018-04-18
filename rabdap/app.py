@@ -59,46 +59,47 @@ def get_mongo_client():
     if mongo_client is None:
         mongo_client = pymongo.MongoClient(
             'mongodb://{0}:{1}@{2}/{3}'.format(config['MONGO_USER'],
-                 urllib.parse.quote_plus( config['MONGO_PASSW'] ),
-                 config['MONGO_ADDR'], config['MONGO_DB']) )
+                urllib.parse.quote_plus( config['MONGO_PASSW'] ),
+                config['MONGO_ADDR'], config['MONGO_DB']) )
         current_app.mongo_client = mongo_client
     client_db = mongo_client.get_database(config['MONGO_DB'])
     return client_db
 
 # begin Database Queries
 
-def get_rabdap_entry(id_type, id_val):
-    mongo_client = get_mongo_client()
-    resp = mongo_client['rabids'].find_one(
-        { id_type : id_val },
+def get_rabdap_entry(mongoClient, idType, idVal):
+    entry = mongoClient['rabids'].find_one(
+        { idType : idVal },
         {'_id': False, 'bruid': True,
         'rabid': True, 'shortid': True } )
-    return resp
+    return entry
 
-def create_rabdap_entry(id_type, id_val):
-    ldap_client = get_ldap_client()
-    mongo_client = get_mongo_client()
-    resp = ldap_client.search(id_val, id_type)
+def create_rabdap_entry(ldapClient, mongoClient, idType, idVal):
+    resp = ldapClient.search(idVal, idType)
     entry = cast_entry_data(resp[0])
-    inserted = mongo_client['rabids'].insert_one(entry)
-    return inserted.inserted_id
+    inserted = mongoClient['rabids'].insert_one(entry)
+    created = get_rabdap_entry(
+        mongoClient, '_id', inserted.inserted_id)
+    return created
 
 # end Database Queries
 
-
-@app.route('/get/<id_type>/<id_val>', methods=['GET'])
-def get(id_type, id_val):
-    entry = get_rabdap_entry(id_type, id_val)
+@app.route('/get/<idType>/<idVal>', methods=['GET'])
+def get(idType, idVal):
+    mongo_client = get_mongo_client()
+    entry = get_rabdap_entry(mongo_client, idType, idVal)
     return jsonify(entry)
 
-@app.route('/gorc/<id_type>/<id_val>', methods=['GET'])
-def get_or_create(id_type, id_val):
-    entry = get_rabdap_entry(id_type, id_val)
+@app.route('/gorc/<idType>/<idVal>', methods=['GET'])
+def get_or_create(idType, idVal):
+    mongo_client = get_mongo_client()
+    entry = get_rabdap_entry(mongo_client, idType, idVal)
     if entry is None:
         logging.debug("Creating ID data for {0}:{1}".format(
-            id_type, id_val) )
-        rabdap_id = create_rabdap_entry(id_type, id_val)
-        entry = get_rabdap_entry('_id', rabdap_id)
+            idType, idVal) )
+        ldap_client = get_ldap_client()
+        entry = create_rabdap_entry(
+            ldap_client, mongo_client, idType, idVal)
     return jsonify(entry)
 
 @app.route('/regenerate', methods=['POST'])

@@ -7,7 +7,7 @@ import urllib
 from datetime import datetime
 
 import pymongo
-from flask import Flask, jsonify, current_app
+from flask import Flask, jsonify, current_app, request
 
 from rabdap.utils import LdapClient
 from config.settings import config
@@ -40,6 +40,26 @@ def cast_entry_data(ldapData):
     entry_data['rabid'] = 'http://vivo.brown.edu/individual/{}'.format(
         entry_data['shortid'])
     return entry_data
+
+def check_rabdap_filters(filterData):
+    allowed_filters = [ 'id_filter', 'date_filter' ]
+    allowed_id_types = [ 'bruid', 'shortid', 'uuid', 'name', 'email' ]
+    allowed_date_types = [ 'updated', 'created' ]
+    recognized = { f: filterData[f] for f in filterData
+                        if f in allowed_filters }
+    mongo_filters = []
+    id_filter = recognized.get('id_filter')
+    date_filter = recognized.get('date_filter')
+    if id_filter and id_filter['id_type'] in allowed_id_types:
+        mongo_filters.append({ id_filter['id_type']: { 
+            '$in': [ v for v in id_filter['id_vals'] ]
+            } } )
+    if date_filter and date_filter['date_type'] in allowed_date_types:
+        date = datetime( date_filter['year'],
+            date_filter['month'], date_filter['day'])
+        mongo_filters.append(
+            { date_filter['date_type']: { '$lt': date } })
+    return mongo_filters[0]
 
 # end Data Transformations
 
@@ -82,6 +102,14 @@ def create_rabdap_entry(ldapClient, mongoClient, idType, idVal):
         mongoClient, '_id', inserted.inserted_id)
     return created
 
+def get_many_rabdap_entries(mongoClient, filterData):
+    good_filters = check_rabdap_filters(filterData)
+    if good_filters:
+        cursor = mongoClient['rabids'].find(
+            good_filters, { '_id': False })
+        return jsonify( [ e for e in cursor ] )
+    return {}
+
 # end Database Queries
 
 @app.route('/get/<idType>/<idVal>', methods=['GET'])
@@ -103,8 +131,11 @@ def get_or_create(idType, idVal):
     return jsonify(entry)
 
 @app.route('/regenerate', methods=['POST'])
-def regenerate(id_type, id_val):
-    pass
+def regenerate():
+    data_filters = request.get_json()
+    mongo_client = get_mongo_client()
+    entries = get_many_rabdap_entries(mongo_client, data_filters)
+    return entries
 
 
 if __name__ == '__main__':

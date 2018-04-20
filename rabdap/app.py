@@ -4,7 +4,8 @@ import csv
 import argparse
 import logging
 import urllib
-from datetime import datetime
+import datetime
+import collections
 
 import pymongo
 from flask import Flask, jsonify, current_app, request
@@ -34,32 +35,52 @@ def unpack_ldap_data(ldapData):
 
 def cast_entry_data(ldapData):
     entry_data = unpack_ldap_data(ldapData)
-    entry_data['created'] = datetime.now()
-    entry_data['updated'] = datetime.now()
+    entry_data['created'] = datetime.datetime.now()
+    entry_data['updated'] = entry_data['created']
     entry_data['historical'] = {}
     entry_data['rabid'] = 'http://vivo.brown.edu/individual/{}'.format(
         entry_data['shortid'])
     return entry_data
 
-def check_rabdap_filters(filterData):
-    allowed_filters = [ 'id_filter', 'date_filter' ]
-    allowed_id_types = [ 'bruid', 'shortid', 'uuid', 'name', 'email' ]
-    allowed_date_types = [ 'updated', 'created' ]
-    recognized = { f: filterData[f] for f in filterData
-                        if f in allowed_filters }
-    mongo_filters = []
-    id_filter = recognized.get('id_filter')
-    date_filter = recognized.get('date_filter')
-    if id_filter and id_filter['id_type'] in allowed_id_types:
-        mongo_filters.append({ id_filter['id_type']: { 
-            '$in': [ v for v in id_filter['id_vals'] ]
-            } } )
-    if date_filter and date_filter['date_type'] in allowed_date_types:
-        date = datetime( date_filter['year'],
-            date_filter['month'], date_filter['day'])
-        mongo_filters.append(
-            { date_filter['date_type']: { '$lt': date } })
-    return mongo_filters[0]
+def merge_entries(oldEntry, futureEntry):
+    merged = { k: v for k,v in futureEntry.items() }
+    merged['created'] = oldEntry['created']
+    historical = collections.defaultdict(list)
+    for k,v in oldEntry['historical'].items():
+        historical[k] = v
+    del oldEntry['historical']
+    for k,v in oldEntry.items():
+        if oldEntry[k] != merged[k]:
+            historical[k].insert(0, v)
+    merged['historical'] = { k: v[:10] for k,v in historical.items() }
+    return merged
+    
+
+# def check_rabdap_filters(filterData):
+#     allowed_filters = [ 'id_filter', 'date_filter' ]
+#     allowed_id_types = [ 'bruid', 'shortid', 'uuid', 'name', 'email' ]
+#     allowed_date_types = [ 'updated', 'created' ]
+#     recognized = { f: filterData[f] for f in filterData
+#                         if f in allowed_filters }
+#     mongo_filters = []
+#     id_filter = recognized.get('id_filter')
+#     date_filter = recognized.get('date_filter')
+#     if id_filter and id_filter['id_type'] in allowed_id_types:
+#         mongo_filters.append({ id_filter['id_type']: { 
+#             '$in': [ v for v in id_filter['id_vals'] ]
+#             } } )
+#     if date_filter and date_filter['date_type'] in allowed_date_types:
+#         date = datetime( date_filter['year'],
+#             date_filter['month'], date_filter['day'])
+#         mongo_filters.append(
+#             { date_filter['date_type']: { '$lt': date } })
+#     return mongo_filters[0]
+
+def create_date_filter(month=0,year=0,day=0):
+    default = datetime.datetime.now()
+    date = datetime.datetime( year or default.year,
+        month or default.month, day or default.day )
+    return { 'updated': { '$lt': date } }
 
 # end Data Transformations
 
@@ -103,12 +124,23 @@ def create_rabdap_entry(ldapClient, mongoClient, idType, idVal):
     return created
 
 def get_many_rabdap_entries(mongoClient, filterData):
-    good_filters = check_rabdap_filters(filterData)
-    if good_filters:
-        cursor = mongoClient['rabids'].find(
-            good_filters, { '_id': False })
-        return jsonify( [ e for e in cursor ] )
-    return {}
+    cursor = mongoClient['rabids'].find(
+        filterData, { '_id': False })
+    return [ entry for entry in cursor ]
+
+def update_rabdap_entries(ldapClient, mongoClient, rabdapEntries, idType):
+    ldap_data = ldap_client.search(
+        [ e[idType] for e in rabdapEntries ], idType )
+    cast_data = [ cast_entry_data(l) for l in ldap_data ]
+    updated_index = { c[idType]: c for c in cast_data }
+    matched_entries = [ ( e, updated_index.get(e[idType], None) )
+        for e in rabdapEntries ]
+    future_entries =  [ merge_entries(m[0], m[1])
+        for m in matched_entries ]
+    for f in future_entries:
+        mongo_resp = mongoClient.replace_one({ '_id' : f['_id']}, f)
+    return True
+
 
 # end Database Queries
 
@@ -130,12 +162,17 @@ def get_or_create(idType, idVal):
             ldap_client, mongo_client, idType, idVal)
     return jsonify(entry)
 
-@app.route('/regenerate', methods=['POST'])
-def regenerate():
-    data_filters = request.get_json()
+@app.route('/regenerate/<filterType>', methods=['POST'])
+def regenerate(filterType):
+    day = request.args.get('day',0)
+    month = request.args.get('month',0)
+    year = request.args.get('year',0)
+    date_filter = create_date_filter( int(month), int(year), int(day) )
     mongo_client = get_mongo_client()
-    entries = get_many_rabdap_entries(mongo_client, data_filters)
-    return entries
+    existing_entries = get_many_rabdap_entries(mongo_client, date_filter)
+    ldap_client = get_ldap_client()
+    future_entries = update_rabdap_entries(ldap_client, mongo_client, entries)
+    return jsonify(entries)
 
 
 if __name__ == '__main__':

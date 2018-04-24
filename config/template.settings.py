@@ -9,6 +9,7 @@ config = {
     'MONGO_PASSW': '',
     'MONGO_ADDR': '',
     'MONGO_DB' : '',
+    'MONGO_COLL' : '',
     'LDAP_SERVER': '',
     'LDAP_USER' : '',
     'LDAP_USERGROUP' : '',

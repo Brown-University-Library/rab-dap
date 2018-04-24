@@ -55,7 +55,6 @@ def merge_entries(oldEntry, futureEntry):
     merged['historical'] = { k: v[:10] for k,v in historical.items() }
     return merged
     
-
 # def check_rabdap_filters(filterData):
 #     allowed_filters = [ 'id_filter', 'date_filter' ]
 #     allowed_id_types = [ 'bruid', 'shortid', 'uuid', 'name', 'email' ]
@@ -82,6 +81,13 @@ def create_date_filter(month=0,year=0,day=0):
         month or default.month, day or default.day )
     return { 'updated': { '$lt': date } }
 
+def create_rabdap_filter(filterType, kwargs):
+    day = kwargs.get('day',0)
+    month = kwargs.get('month',0)
+    year = kwargs.get('year',0)
+    date_filter = create_date_filter( int(month), int(year), int(day) )
+    return date_filter    
+
 # end Data Transformations
 
 def get_ldap_client():
@@ -104,13 +110,13 @@ def get_mongo_client():
                 config['MONGO_ADDR'], config['MONGO_DB']) )
         current_app.mongo_client = mongo_client
     client_db = mongo_client.get_database(config['MONGO_DB'])
-    return client_db
+    client_col = client_db[config['MONGO_COLL']]
+    return client_col
 
 # begin Database Queries
 
 def get_rabdap_entry(mongoClient, idType, idVal):
-    entry = mongoClient['rabids'].find_one(
-        { idType : idVal },
+    entry = mongoClient.find_one( { idType : idVal },
         {'_id': False, 'bruid': True,
         'rabid': True, 'shortid': True } )
     return entry
@@ -118,29 +124,47 @@ def get_rabdap_entry(mongoClient, idType, idVal):
 def create_rabdap_entry(ldapClient, mongoClient, idType, idVal):
     resp = ldapClient.search(idVal, idType)
     entry = cast_entry_data(resp[0])
-    inserted = mongoClient['rabids'].insert_one(entry)
+    inserted = mongoClient.insert_one(entry)
     created = get_rabdap_entry(
         mongoClient, '_id', inserted.inserted_id)
     return created
 
 def get_many_rabdap_entries(mongoClient, filterData):
-    cursor = mongoClient['rabids'].find(
+    cursor = mongoClient.find(
         filterData, { '_id': False })
     return [ entry for entry in cursor ]
 
-def update_rabdap_entries(ldapClient, mongoClient, rabdapEntries, idType):
-    ldap_data = ldap_client.search(
-        [ e[idType] for e in rabdapEntries ], idType )
+def get_ldap_entries(ldapClient, searchTerms, searchField):
+    ldap_data = ldapClient.search(searchTerms, searchField )
     cast_data = [ cast_entry_data(l) for l in ldap_data ]
-    updated_index = { c[idType]: c for c in cast_data }
-    matched_entries = [ ( e, updated_index.get(e[idType], None) )
-        for e in rabdapEntries ]
-    future_entries =  [ merge_entries(m[0], m[1])
-        for m in matched_entries ]
-    for f in future_entries:
-        mongo_resp = mongoClient.replace_one({ '_id' : f['_id']}, f)
-    return True
+    return cast_data
 
+def merge_entry_data(currentEntries, futureEntries, key):    
+    future_index = { f[key]: f for f in futureEntries }
+    matched_entries = [ ( c, future_index.get(c[key], None) )
+        for c in currentEntries ]
+    merged_entries =  [ merge_entries(m[0], m[1])
+        for m in matched_entries ]
+    return merged_entries
+
+def update_rabdap_entries(ldapClient, mongoClient, currentEntries, key):
+    future_entries = get_ldap_entries(ldapClient,
+        [ e[ key ] for e in currentEntries ], key)
+    updated_entries = merge_entry_data(currentEntries,
+        future_entries, key)
+    results = overwrite_rabdap_entries(
+        mongoClient, updated_entries, key)
+    return results
+
+def overwrite_rabdap_entries(mongoClient, updatedEntries, key):
+    results = []
+    for e in updatedEntries:
+        try:
+            mongo_resp = mongoClient.replace_one({ key: e[key] }, e)
+            results.append({e[key]: mongo_resp.modified_count})
+        except:
+            results.append({e[key]: 0})
+    return results
 
 # end Database Queries
 
@@ -164,15 +188,13 @@ def get_or_create(idType, idVal):
 
 @app.route('/regenerate/<filterType>', methods=['POST'])
 def regenerate(filterType):
-    day = request.args.get('day',0)
-    month = request.args.get('month',0)
-    year = request.args.get('year',0)
-    date_filter = create_date_filter( int(month), int(year), int(day) )
+    rabdap_filter = create_rabdap_filter(filterType, request.args)
     mongo_client = get_mongo_client()
-    existing_entries = get_many_rabdap_entries(mongo_client, date_filter)
+    existing_entries = get_many_rabdap_entries(mongo_client, rabdap_filter)
     ldap_client = get_ldap_client()
-    future_entries = update_rabdap_entries(ldap_client, mongo_client, entries)
-    return jsonify(entries)
+    update_results = update_rabdap_entries(
+        ldap_client, mongo_client, existing_entries, 'bruid')
+    return jsonify(update_results)
 
 
 if __name__ == '__main__':
